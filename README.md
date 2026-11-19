@@ -50,7 +50,26 @@ A telefonról a `http://<a-Mac-IP-címe>:8824` cím is megnyílik, de HTTPS nél
 - `index.html?test=stress[&files=a.jpg,b.jpg]`: szám-OCR stresszteszt. A fotókat 12-féleképpen torzítja (kicsinyítés, nagyítás, élsimítás nélküli átméretezés, elmosás, ±1,5° forgatás, erős JPEG, sötétítés, kombinált), és megszámolja, hányszor jön ki a helyes szám. Más böngésző / OS képfeldolgozását utánozza.
 - Helyi fejlesztéshez: `python3 tools/serve.py`. Ez gyorsítótár nélkül szolgál ki, így a módosított JS-modulok azonnal frissülnek.
 - `index.html?test=unit`: csak a fotó nélküli tesztek. Ha nincs hálózat, az API-tesztek „kihagyva” állapotot kapnak, a helyiek ettől függetlenül lefutnak.
+- `index.html?test=live`: az élő szkenner kamera nélkül. A 6 mintafotón kártya-négyszöget keres és perspektívát korrigál, üres asztalképen nem jelez lapot, megméri a gyors út idejét (asztali Chrome-ban átlagosan legfeljebb 3 mp a cél), majd a fotókat vászon-videóként adja a szkennernek: zöld keret, egy találat amíg a lap a képben van, „Hozzáadás” egy darabot vesz fel, „Nem ez” nem ad hozzá.
 - A fotós teszt előtte törli a készletet; ha nem akarod, add hozzá a `&keep=1` paramétert. A nyelvet Auto-ra állítja.
+
+## Élő szkennelés
+
+A Szkennelés fülön azonnal a hátsó kamera képe látszik (teljes képernyő, `playsinline`, némítva, folyamatos fókusz, ha a böngésző engedi). Nem kell fotót készíteni.
+
+1. A képkockákon (kb. 8/mp, lekicsinyítve) kártya alakú négyszöget keres. Ha a lap mozog vagy életlen, ezt írja: „Tartsd stabilan”.
+2. Stabil lapnál zöld keret és zöld szkennervonal jelenik meg, rövid rezgéssel, ha a telefon támogatja.
+3. A felismerés háttérszálon fut: perspektíva-korrekció, a gyűjtői szám gyors olvasása, képi ujjlenyomat. Két képkocka eredménye szavaz. A részletes, lassú számolvasás csak akkor indul, ha a gyors út nem talált számot.
+4. Alul felcsúszik a lap: kép, név, szett és szám, nyelv, ritkaság, ár forintban, vagy „nincs ár”. Ha már megvan: „Már megvan: N db”.
+5. **Hozzáadás** egy darabot vesz fel. **Nem ez** a következő 2–4 jelöltet mutatja, egy koppintással kiválasztható, vagy kézi keresés.
+6. Ugyanazt a lapot nem ismeri fel újra, amíg a képben marad. Ha kikerül, a következő lap új felismerés.
+7. Ha kb. 3,5 mp alatt sem sikerül: a keret sárga, és ezt írja: „Nem ismerem fel. Próbáld jobb fényben, tükröződés nélkül”.
+
+**Gyors mód** (alapból ki): csak nagyon biztos találatot ad hozzá magától, 2 mp-ig visszavonható. Rossz lapot magától nem ad hozzá. Árat nem talál ki.
+
+Az OCR-modell (angol és japán) és a 4 kiemelt szett képi indexe az első megnyitáskor töltődik, „Előkészítés…” jelzéssel, nem az első lap alatt.
+
+Ha a Safari nem ad kamerát: Beállítások › Safari › Kamera › Engedélyezés. Főképernyős appnál: Beállítások › Okemon › Kamera. Utána a „Kamera indítása” gomb. A Fotó gomb és a kézi keresés kamera nélkül is megmarad.
 
 ## Hogyan ismeri fel a lapot?
 
@@ -89,7 +108,7 @@ A felismerés a teljes TCGdex-katalógusban keres: angol és japán, régi és �
 - **Sima (nem teljes-art) lap csak képből.** Ha se a szám, se a név nem olvasható, a képi egyezés a kis illusztráció miatt gyengébb. Ilyenkor a helyes lap általában az első jelöltek között van, de az app nem adja hozzá magától.
 - **Mire van szükség.** Jó fény, éles kép, a lap kitöltse a keretet. Csillogó fóliánál kerüld a tükröződést.
 - **Időigény.**
-  - Az első szkennelés lassabb: letölti az OCR-motort (kb. 15 MB).
+  - Az első megnyitás lassabb: letölti az OCR-motort (angol + japán) és a kiemelt szettek képi indexét („Előkészítés…”).
   - Az első japán / teljes-art lapnál letölti a képi indexet. Ez Wi-Fi-n előre is megtehető a Beállításokban.
   - Utána egy lap 1–5 mp.
 - **Régi lapok.** A régi (WOTC-kori) lapoknál a szám jobb alul van; ezt is próbálja, de kevésbé tesztelt.
@@ -181,7 +200,10 @@ index.html, styles.css, manifest.webmanifest, sw.js, icons/
 js/app.js         – felület
 js/db.js          – tároló (IndexedDB) + szinkron-interfész (NoopSync)
 js/api.js         – TCGdex / pokemontcg.io / árfolyam
-js/recognize.js   – kivágás, OCR, szám-értelmezés, képi ujjlenyomat
+js/recognize.js   – kivágás, OCR, szám-értelmezés, képi ujjlenyomat (gyors út: kevesebb OCR)
+js/detect.js      – kártya-négyszög, élesség, perspektíva-korrekció
+js/live.js        – élő kamera: keret, szkennervonal, duplázásvédelem
+js/scan-worker.js – OCR és kivágás háttérszálon
 js/imageindex.js  – szettenkénti képi index (IndexedDB)
 js/identify.js    – jelöltpontozás + „biztos” döntés (UI-tól független, tesztelhető)
 js/completeness.js – szett-komplettség számítása

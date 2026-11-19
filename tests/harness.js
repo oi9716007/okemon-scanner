@@ -86,4 +86,5 @@ if (q === 'stress') import('./stress.js').then(async m => {
   const el = document.createElement('pre'); el.id = 'testReport'; el.style.cssText = 'position:fixed;left:0;right:0;bottom:84px;max-height:60vh;overflow:auto;z-index:90;background:#050505;border-top:2px solid #f5c518;color:#eee;font:12px/1.4 monospace;margin:0;padding:10px;white-space:pre-wrap';
   el.textContent = res.map(r => `${r.f}: szám ${r.ok}/${r.n}${sp.has('full') ? ` · auto ${r.autos} · HAMIS auto ${r.falseAdds}` : ''}\n` + r.rows.join('\n')).join('\n\n'); document.body.appendChild(el);
 });
-if (q && q !== 'stress') run(q === 'all' ? ALL : q === 'unit' ? [] : q.split(','), { clear: !sp.has('keep'), unit: q === 'all' || q === 'unit', strict: sp.has('strict') });
+if (q === 'live') import('./live.js').then(m => m.runLive());
+else if (q && q !== 'stress') run(q === 'all' ? ALL : q === 'unit' ? [] : q.split(','), { clear: !sp.has('keep'), unit: q === 'all' || q === 'unit', strict: sp.has('strict') });

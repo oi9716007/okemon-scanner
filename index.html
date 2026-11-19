@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div id="prepBar" class="prep-bar" hidden>Előkészítés…</div>
 <header class="top">
   <div class="brand"><span class="logo">OKEMON</span><span class="sub">Scanner</span></div>
   <div id="netState" class="net"></div>
@@ -47,30 +48,37 @@
 
   <!-- SZKENNELÉS -->
   <section id="v-scan" class="view">
-    <div class="cam-wrap" id="camWrap">
-      <video id="video" playsinline muted autoplay></video>
-      <div class="guide"><div class="frame" id="guide"><i></i><i></i><i></i><i></i><span>Illeszd a lapot a keretbe</span></div></div>
-      <div class="cam-msg" id="camMsg">A kamera indításához nyomd meg a gombot.</div>
+    <div class="cam-stage" id="camWrap">
+      <video id="video" playsinline webkit-playsinline muted autoplay></video>
+      <canvas id="overlay" class="overlay"></canvas>
+      <div class="guide" id="guide" hidden><div class="frame"><i></i><i></i><i></i><i></i></div></div>
+      <div class="cam-msg" id="camMsg">
+        <p id="camMsgText">A kamera a Szkennelés fülön indul. Ha a böngésző kéri, engedélyezd.</p>
+        <button class="btn gold" id="btnCamStart" type="button" hidden>Kamera indítása</button>
+      </div>
       <div class="scan-status" id="scanStatus"></div>
+      <div class="live-top">
+        <div class="seg" id="langSeg">
+          <button data-lang="auto" class="on" type="button">Auto</button>
+          <button data-lang="en" type="button">🇬🇧 Angol</button>
+          <button data-lang="ja" type="button">🇯🇵 Japán</button>
+        </div>
+        <label class="toggle quick"><input type="checkbox" id="quickAdd"> <span>Gyors mód</span></label>
+      </div>
+      <div class="live-card" id="liveCard" hidden></div>
+      <div class="undo-bar" id="undoBar" hidden></div>
+      <div class="live-tools">
+        <button class="btn small" id="btnShoot" type="button">Egyszeri kép</button>
+        <button class="btn small" id="btnCam" type="button" title="Kamera be/ki">🎥</button>
+        <label class="btn small file">Fotó<input type="file" id="fileIn" accept="image/*" capture="environment" hidden></label>
+        <button class="btn small" id="btnManual" type="button">Kézi keresés</button>
+      </div>
     </div>
-    <div class="seg" id="langSeg">
-      <button data-lang="auto" class="on">Auto</button>
-      <button data-lang="en">🇬🇧 Angol</button>
-      <button data-lang="ja">🇯🇵 Japán</button>
-    </div>
-    <div class="row">
-      <button class="btn big gold grow" id="btnShoot">📸 Szkennel</button>
-      <button class="btn big" id="btnCam" title="Kamera be/ki">🎥</button>
-    </div>
-    <div class="row">
-      <label class="btn grow file">🖼 Fotó / feltöltés<input type="file" id="fileIn" accept="image/*" capture="environment" hidden></label>
-      <button class="btn grow" id="btnManual">🔎 Kézi keresés</button>
-    </div>
-    <label class="toggle"><input type="checkbox" id="autoAdd" checked> <span>Sorozat mód: biztos találatot azonnal hozzáad</span></label>
-    <label class="toggle"><input type="checkbox" id="autoLoop"> <span>Folyamatos szkennelés (kb. 2 mp-enként)</span></label>
+    <label class="toggle photo-add"><input type="checkbox" id="autoAdd" checked> <span>Fotónál: biztos találatot azonnal hozzáad</span></label>
+    <label class="toggle" hidden><input type="checkbox" id="autoLoop"> <span>Folyamatos szkennelés (kb. 2 mp-enként)</span></label>
     <div id="scanResult"></div>
-    <h2>Ebben a menetben</h2>
-    <div id="session" class="list"></div>
+    <button class="btn small session-toggle" id="sessionToggle" type="button">Ebben a menetben</button>
+    <div id="session" class="list session-list collapsed"></div>
   </section>
 
   <!-- GYŰJTEMÉNY -->
