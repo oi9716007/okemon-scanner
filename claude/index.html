@@ -58,14 +58,23 @@
           <button data-lang="ja">🇯🇵 JP</button>
         </div>
         <div class="live-tools">
-          <label class="chip"><input type="checkbox" id="fastMode"> Gyors mód</label>
           <label class="chip">🖼 Fotó<input type="file" id="fileIn" accept="image/*" hidden></label>
           <button class="chip" id="btnManual">🔎 Kézi</button>
         </div>
       </div>
       <div id="liveStatus" class="live-status"></div>
+      <div id="failBox" class="failbox" hidden></div>
+      <div id="proc" class="proc" hidden><div class="spin"></div><div id="procTitle" class="proc-t"></div><div id="procSub" class="proc-s"></div></div>
+      <div class="cam-bottom">
+        <button id="zoomPill" class="zoom-pill" type="button" aria-label="Nagyítás">1×</button>
+        <button id="shutter" class="shutter" type="button" aria-label="Lap beolvasása"><i></i></button>
+      </div>
       <div id="camMsg" class="cam-msg" hidden><div><p id="camMsgText">A kamera indításához koppints a gombra.</p><button class="btn big green" id="btnCamStart">📷 Kamera indítása</button></div></div>
-      <div id="resultCard" class="rcard"><div id="scanResult"></div></div>
+    </div>
+    <div id="resultPage" class="rpage" hidden>
+      <div class="rp-head"><button id="rpBack" type="button" aria-label="Vissza">←</button><span>Eredmény</span></div>
+      <div class="rp-body"><div id="scanResult"></div></div>
+      <div class="rp-bar"><div id="rpAdded" class="rp-added" hidden></div><div id="rpBar" class="rp-btns"></div></div>
     </div>
   </section>
 

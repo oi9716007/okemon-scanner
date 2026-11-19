@@ -1,6 +1,6 @@
 // Okemon Scanner service worker: az app-héj offline is indul; API-hívások mindig hálózatról.
-const V = 'okemon-claude-v6';
-const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/db.js', 'js/api.js', 'js/recognize.js', 'js/packinfo.js', 'js/products.js', 'js/imageindex.js', 'js/identify.js', 'js/completeness.js', 'js/catalog.js', 'js/history.js', 'js/live.js', 'js/detect-core.js', 'js/detect-worker.js', 'icons/icon-192.png', 'icons/icon-512.png'];
+const V = 'okemon-claude-v6-snap1';
+const SHELL = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/db.js', 'js/api.js', 'js/recognize.js', 'js/packinfo.js', 'js/products.js', 'js/imageindex.js', 'js/identify.js', 'js/completeness.js', 'js/catalog.js', 'js/history.js', 'js/snap.js', 'js/detect-core.js', 'js/detect-worker.js', 'js/quadlines.js', 'js/cardsig.js', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('okemon-claude-v') && k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
