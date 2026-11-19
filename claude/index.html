@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Okemon Scanner · Claude v6</title>
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Okemon">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">OKEMON</span><span class="sub">Scanner</span></div>
+  <div id="prep" class="prep" hidden></div>
+  <div id="netState" class="net"></div>
+</header>
+
+<main>
+  <!-- ÁTTEKINTÉS -->
+  <section id="v-home" class="view active">
+    <div class="hero">
+      <div class="hero-label">A gyűjtemény értéke</div>
+      <div id="totalHuf" class="hero-num">0 Ft</div>
+      <div class="hero-stats">
+        <div><b id="stCards">0</b><span>lap</span></div>
+        <div><b id="stUnique">0</b><span>különböző</span></div>
+        <div class="warn"><b id="stNoPrice">0</b><span>ár nélküli</span></div>
+      </div>
+      <div class="hero-meta" id="lastRefresh">Árfrissítés: –</div>
+      <div class="hero-meta" id="fxLine"></div>
+    </div>
+    <button class="btn big gold" data-go="scan">📷 Szkennelés indítása</button>
+    <button class="btn big" id="btnRefreshHome">↻ Árak frissítése</button>
+    <h2>Kiemelt szettek</h2>
+    <div id="featured" class="featured"></div>
+    <div class="h2row"><h2>Szettek: érték és komplettség</h2></div>
+    <div class="seg small" id="compSeg"><button data-mode="total">Teljes szett (titkos lapokkal)</button><button data-mode="official">Hivatalos (1–/xxx)</button></div>
+    <div id="bySet" class="list"></div>
+    <h2>Legértékesebb lapok</h2>
+    <div id="topCards" class="list"></div>
+  </section>
+
+  <!-- SZKENNELÉS -->
+  <section id="v-scan" class="view">
+    <div id="live" class="live" data-state="off">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+      <div class="live-top">
+        <div class="seg small" id="langSeg">
+          <button data-lang="auto" class="on">Auto</button>
+          <button data-lang="en">🇬🇧 EN</button>
+          <button data-lang="ja">🇯🇵 JP</button>
+        </div>
+        <div class="live-tools">
+          <label class="chip"><input type="checkbox" id="fastMode"> Gyors mód</label>
+          <label class="chip">🖼 Fotó<input type="file" id="fileIn" accept="image/*" hidden></label>
+          <button class="chip" id="btnManual">🔎 Kézi</button>
+        </div>
+      </div>
+      <div id="liveStatus" class="live-status"></div>
+      <div id="camMsg" class="cam-msg" hidden><div><p id="camMsgText">A kamera indításához koppints a gombra.</p><button class="btn big green" id="btnCamStart">📷 Kamera indítása</button></div></div>
+      <div id="resultCard" class="rcard"><div id="scanResult"></div></div>
+    </div>
+  </section>
+
+  <!-- GYŰJTEMÉNY -->
+  <section id="v-coll" class="view">
+    <div class="coll-hero">
+      <div class="hero-label">Készletem értéke</div>
+      <div id="cTotal" class="hero-num">0 Ft</div>
+      <div class="hint" id="cTotalSub"></div>
+    </div>
+    <div class="seg" id="collTabs"><button data-ct="sets" class="on">🗂 Szettjeim</button><button data-ct="top">🏆 Top 10</button><button data-ct="list">☰ Lista</button></div>
+    <div id="ctSets">
+      <div class="row sets-bar"><label class="fld grow">Rendezés<select id="setSort">
+        <option value="value">Érték ↓</option><option value="comp">Komplettség ↓</option><option value="name">Név A→Z</option><option value="recent">Legutóbb szkennelt</option></select></label></div>
+      <div id="setGrid" class="sgrid"></div>
+    </div>
+    <div id="ctTop" hidden><div id="topList" class="list"></div><p class="hint">Egységár szerint rangsorolva; az ár nélküli lapok kimaradnak.</p></div>
+    <div id="ctList" hidden>
+    <div class="coll-head">
+      <input id="fText" type="search" placeholder="Keresés: név, szett, szám…">
+      <div class="filters">
+        <select id="fLang"><option value="">Minden nyelv</option><option value="EN">Angol</option><option value="JP">Japán</option></select>
+        <select id="fSet"><option value="">Minden szett</option></select>
+        <select id="fRarity"><option value="">Minden ritkaság</option></select>
+        <select id="fCat"><option value="">Minden típus</option></select>
+        <select id="fSort">
+          <option value="value">Érték (össz.) ↓</option>
+          <option value="price">Egységár ↓</option>
+          <option value="name">Név A→Z</option>
+          <option value="date">Legutóbb szkennelt</option>
+          <option value="number">Szett + szám</option>
+        </select>
+      </div>
+      <div id="collProg"></div>
+      <div class="coll-sum" id="collSum"></div>
+    </div>
+    <div id="collList" class="list cards"></div>
+    </div>
+  </section>
+
+  <!-- BEÁLLÍTÁSOK -->
+  <section id="v-set" class="view">
+    <h2>Árforrás</h2>
+    <div class="seg" id="prefSeg">
+      <button data-pref="cardmarket" class="on">Cardmarket (EUR)</button>
+      <button data-pref="tcgplayer">TCGplayer (USD)</button>
+    </div>
+    <p class="hint">Ha az elsődleges forrásnak nincs ára, a másikat használjuk. Ha egyiknek sincs: „nincs ár”, és nem számít bele az összegbe.</p>
+    <h2>Árfolyam</h2>
+    <label class="toggle"><input type="checkbox" id="fxManual"> <span>Kézi árfolyam</span></label>
+    <div class="row">
+      <label class="fld grow">EUR → HUF<input id="fxEur" type="number" step="0.01" inputmode="decimal"></label>
+      <label class="fld grow">USD → HUF<input id="fxUsd" type="number" step="0.01" inputmode="decimal"></label>
+    </div>
+    <div class="row"><button class="btn grow" id="btnFx">↻ Élő árfolyam lekérése</button><button class="btn grow" id="btnFxSave">Mentés</button></div>
+    <p class="hint" id="fxInfo"></p>
+    <h2>Árak</h2>
+    <button class="btn big" id="btnRefresh">↻ Minden ár frissítése</button>
+    <h2>Képi felismerés</h2>
+    <button class="btn big" id="btnIndex">🖼 Képi index letöltése (kiemelt szettek)</button>
+    <button class="btn big" id="btnIndexOwned">🖼 Index a készletben szereplő szettekhez</button>
+    <div class="row"><label class="fld" style="flex:0 0 96px">Nyelv<select id="ixLang"><option value="en">Angol</option><option value="ja">Japán</option></select></label>
+      <label class="fld grow">Bármely szett<select id="ixSet"></select></label></div>
+    <button class="btn" id="btnIndexOne" style="width:100%">🖼 Index ehhez a szetthez</button>
+    <p class="hint">Szettenként a lapképekből ujjlenyomatot készít és a telefonon tárolja (szettenként egyszeri, kb. 3–8 MB letöltés – Wi-Fi-n ajánlott). Ezzel a holós / teljes-art és a japán lapok is gyorsan felismerhetők akkor is, ha a szöveg olvashatatlan. Szkenneléskor a valószínű szettek (kiolvasott szettkód / összlapszám, készletben szereplő, mostanában szkennelt és kiemelt szettek) indexét magától letölti.</p>
+    <h2>Export / import</h2>
+    <div class="row"><button class="btn grow" id="btnCsv">⬇ CSV export</button><button class="btn grow" id="btnJson">⬇ JSON export</button></div>
+    <label class="btn file">⬆ Import (CSV vagy JSON)<input type="file" id="impIn" accept=".csv,.json,text/csv,application/json" hidden></label>
+    <p class="hint">Import: az azonos lap + változat + állapot tételek darabszáma összeadódik.</p>
+    <h2>Adatok</h2>
+    <p class="hint" id="storeInfo"></p>
+    <button class="btn danger" id="btnWipe">Teljes készlet törlése</button>
+    <h2>Névjegy</h2>
+    <p class="hint">Okemon Scanner · adatok: TCGdex, Pokémon TCG API, Frankfurter (EKB). A készlet csak ezen a telefonon (IndexedDB) tárolódik, amíg nincs bekötve felhős szinkron. A Pokémon név és a lapképek a jogtulajdonosok védjegyei.</p>
+  </section>
+</main>
+
+<nav class="tabs">
+  <button data-go="home" class="on"><span>💰</span>Érték</button>
+  <button data-go="scan"><span>📷</span>Szkennel</button>
+  <button data-go="coll"><span>🗂</span>Készlet</button>
+  <button data-go="set"><span>⚙️</span>Beállítás</button>
+</nav>
+
+<div id="sheet" class="sheet" hidden><div class="sheet-bg" data-close></div><div class="sheet-body"><button class="sheet-x" data-close>✕</button><div id="sheetContent"></div></div></div>
+<div id="toast" class="toast"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
