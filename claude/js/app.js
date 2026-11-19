@@ -2,12 +2,12 @@
 import { Store, onChange, itemKey } from './db.js';
 import { extractPrices, choosePrice, getSets, getSet, getCard, searchByName, searchJaByEnglishName, findCandidates, cardRecord, repriceRecord, fetchFx, nameSim, jaImage, setCardImages } from './api.js';
 import { recognize, printSim, printOfUrl, thumb, normalizeCard, warmUp, ocrNameJa } from './recognize.js';
-import { imageSearch, buildIndex } from './imageindex.js';
+import { imageSearch, buildIndex, getIndex } from './imageindex.js';
 import { identify } from './identify.js';
 import { computeProgress } from './completeness.js';
 import { setLogo, catalogItems, catalogGridHtml, topCards } from './catalog.js';
 import { recordPrices, referenceLines, chartSvg, today, SRC } from './history.js';
-import { LiveScanner, CAMERA_HELP } from './live.js';
+import { SnapScanner, CAMERA_HELP } from './snap.js';
 import { detectQuad, warpPerspective } from './detect-core.js';
 import { CW, CH } from './recognize.js';
 import { packInfo, FEATURED, isFeatured, setTitle } from './packinfo.js';
@@ -442,31 +442,52 @@ $('#prefSeg').onclick = async e => {
   toast('Árforrás: ' + b.textContent);
 };
 
-// ---------- élő szkenner (kamera) ----------
-const live = new LiveScanner({
+// ---------- fotózós szkenner (kamera): állandó vezetőkeret → kioldás → feldolgozás → eredményoldal ----------
+let idxCountP = null;
+function indexCount() {
+  return idxCountP || (idxCountP = (async () => {
+    let n = 0; const seen = new Set();
+    for (const [l, id] of [...FEATURED.map(f => [f.lang === 'JP' ? 'ja' : 'en', f.setId]), ...ownedSetPairs()]) {
+      const k = l + '|' + id; if (seen.has(k)) continue; seen.add(k);
+      try { n += (await getIndex(l, id, null, { cachedOnly: true })).length; } catch {}
+    }
+    return n || null;
+  })());
+}
+const live = new SnapScanner({
   video: $('#video'), overlay: $('#overlay'),
   recognizeFrame: (canvas, opt) => recognizeFrame(canvas, opt),
   onDecision: dec => onLiveDecision(dec),
   onFail: (best, info) => onLiveFail(best, info),
   onStatus: (t, kind) => liveStatus(t, kind),
   onState: s => { $('#live').dataset.state = s; },
+  onProcessing: (t, sub) => procShow(t, sub),
+  indexCount,
 });
-function liveStatus(t, kind = '') {
-  const el = $('#liveStatus');
-  el.className = 'live-status ' + kind;
-  el.innerHTML = t ? `<span>${esc(t)}</span>${kind === 'fail' ? '<div class="live-actions"><button class="btn small" id="lsManual">🔎 Kézi keresés</button>' + (lastFail?.cands?.length ? '<button class="btn small" id="lsTips">Tippek</button>' : '') + '<button class="btn small" id="lsRetry">↻ Újra</button></div>' : ''}` : '';
-  $('#lsManual')?.addEventListener('click', () => openManual(lastFail?.r?.name || '', lastFail?.r?.number || ''));
-  $('#lsTips')?.addEventListener('click', () => showResultCard(lastFail, { unsure: true }));
-  $('#lsRetry')?.addEventListener('click', () => { live.retry(); liveStatus('Tarts egy kártyát a kamera elé'); });
+function liveStatus(t) { const el = $('#liveStatus'); el.innerHTML = t ? `<span>${esc(t)}</span>` : ''; }
+// feldolgozás közben a kép elsötétül, a lépés neve látszik
+function procShow(t, sub = '') {
+  const el = $('#proc');
+  if (!t) { el.hidden = true; return; }
+  el.hidden = false; $('#procTitle').textContent = t; $('#procSub').textContent = sub || '';
+  $('#failBox').hidden = true;
 }
 let lastFail = null;
-function onLiveFail(best, info) { lastFail = best && best.cands?.length ? best : null; liveStatus('Nem ismerem fel. Próbáld jobb fényben, tükröződés nélkül', 'fail'); }
+function onLiveFail(best, info) {
+  lastFail = best && best.cands?.length ? best : null;
+  const fb = $('#failBox');
+  fb.innerHTML = `<div class="fb-t">${info?.timeout ? 'A felismerés túl sokáig tartott.' : 'Nem ismertem fel a lapot.'}</div><div class="fb-s">Tartsd laposan, a keretben, csillogás nélkül (a tok fényfoltja ront rajta).</div>
+    <div class="live-actions"><button class="btn small" id="fbRetry">↻ Újra</button><button class="btn small" id="fbManual">🔎 Kézi keresés</button>${lastFail ? '<button class="btn small" id="fbTips">Tippek</button>' : ''}<button class="btn small" id="fbClose">✕</button></div>`;
+  fb.hidden = false;
+  $('#fbRetry').onclick = () => { fb.hidden = true; live.shutter(); };
+  $('#fbManual').onclick = () => { fb.hidden = true; openManual(lastFail?.r?.name || '', lastFail?.r?.number || ''); };
+  $('#fbTips')?.addEventListener('click', () => { fb.hidden = true; showResultCard(lastFail, { unsure: true }); });
+  $('#fbClose').onclick = () => { fb.hidden = true; };
+}
 async function onLiveDecision(dec) {
   try { navigator.vibrate?.(60); } catch {}
-  if (S.fastMode && dec.auto) {
-    await addCandidate(dec.best, dec.r);
-    showResultCard(dec, { added: true, undoMs: 2000 });
-  } else showResultCard(dec);
+  $('#failBox').hidden = true;
+  showResultCard(dec, { unsure: !dec.sure || dec.weak });   // sosem adja hozzá magától: az „+ Hozzáadás” gomb a felhasználóé
 }
 async function startLive({ stream } = {}) {
   const msg = $('#camMsg');
@@ -478,9 +499,10 @@ async function startLive({ stream } = {}) {
     $('#camMsgText').textContent = CAMERA_HELP[e.name] || ('Nem érhető el a kamera (' + (e.name || e.message) + '). Használd a „Fotó” gombot.');
   }
 }
-function stopLive() { live.stop(); hideResultCard(); }
+function stopLive() { live.stop(); hideResultCard(); procShow(null); $('#failBox').hidden = true; }
 $('#btnCamStart').onclick = () => startLive();
-$('#fastMode').onchange = e => { S.fastMode = e.target.checked; saveSettings(); toast(S.fastMode ? 'Gyors mód: a nagyon biztos lapot magától hozzáadja (2 mp-ig visszavonható)' : 'Gyors mód kikapcsolva: mindig te nyomod a „Hozzáadás”-t'); };
+$('#shutter').onclick = () => { $('#failBox').hidden = true; live.shutter(); };
+$('#zoomPill').onclick = () => { const z = live.cycleZoom(); $('#zoomPill').textContent = (z === 1.5 ? '1,5' : z) + '×'; };
 
 // ---------- felismerés egy (kivágott vagy feltöltött) képen ----------
 $('#langSeg').onclick = async e => {
@@ -496,7 +518,7 @@ const ownedSetPairs = () => {
   return [...m.values()].slice(0, 6);
 };
 ownedSetPairs.all = () => { const m = new Map(); CARDS.forEach(c => m.set(c.lang + '|' + c.setId, [c.lang === 'JP' ? 'ja' : 'en', c.setId])); return [...m.values()]; };
-const status = (t) => { if (live.state === 'off' || !t) return; liveStatus(t); };
+const status = () => {};
 let busy = false, lastAdded = null;
 const sessionList = [];
 async function ensureSetMeta() {
@@ -550,59 +572,77 @@ function candHtml(c, i, best) {
   return `<div class="cand ${best ? 'best' : ''}" data-ci="${i}">${img}<b>${c.lang === 'ja' ? '🇯🇵' : '🇬🇧'} ${esc(c.name)}</b><small>${esc(c.setName)}</small><small>${esc(c.localId)}${c.official ? '/' + c.official : ''}</small></div>`;
 }
 
-// ---------- eredmény-kártya (alulról felcsúszik) ----------
-let lastCands = [], lastScan = null, rcTimer = null, rcDec = null;
-function hideResultCard() { clearTimeout(rcTimer); $('#resultCard').classList.remove('up'); rcDec = null; }
-function finishCard(print, id) { hideResultCard(); if (live.state !== 'off') live.resume({ print, id }); }
+// ---------- eredményoldal (teljes képernyő): kép, adatok, állapot, árak, alternatívák, „+ Hozzáadás”, „Új szkennelés” ----------
+let lastCands = [], lastScan = null, rcDec = null, rcState = null;
+function hideResultCard() { $('#resultPage').hidden = true; document.body.classList.remove('rp-open'); rcDec = null; rcState = null; }
+// vissza a kamerához: azonnal újra figyel (nem kell üres kép); a keretben maradt lapot csak változás után olvassa újra magától
+function finishCard() { hideResultCard(); if (live.state !== 'off') live.newScan(); }
+const priceBoxes = rec => {
+  const P = rec.prices || {}, boxes = [];
+  const add = (label, p) => { if (!p) return; const h = p.value * (rate(p.currency) ?? NaN); boxes.push(`<div class="pbox"><small>${label}</small><b>${Number.isFinite(h) ? fmtHuf(h) : '–'}</b><span>${fmtCur(p.value, p.currency)}</span></div>`); };
+  add('Cardmarket · ' + (P.cardmarket?.label || 'trend'), P.cardmarket);
+  if (P.cardmarket?.low) add('Cardmarket · legolcsóbb', { value: P.cardmarket.low, currency: P.cardmarket.currency });
+  add('TCGplayer · ' + (P.tcgplayer?.label || ''), P.tcgplayer);
+  return boxes.length ? boxes.join('') : '<div class="pbox none"><small>Ár</small><b>nincs ár</b><span>ehhez a laphoz most nincs adat</span></div>';
+};
 function showResultCard(dec, { added = false, undoMs = 0, unsure = false } = {}) {
-  const { r, cands, best } = dec;
-  lastCands = cands; lastScan = r; rcDec = dec; clearTimeout(rcTimer);
-  const own = CARDS.filter(c => c.apiId === best.id).reduce((a, c) => a + (c.qty || 0), 0);
-  const img = best.image ? best.image + '/low.webp' : (best.imgUrl || (r.card ? thumb(r.card, 200) : ''));
-  const alts = cands.filter(c => c !== best).slice(0, 4);
-  $('#scanResult').innerHTML = `
-    <div class="rc-top">${img ? `<img id="rcImg" src="${esc(img)}" alt="">` : '<div class="noimg"></div>'}
-      <div class="rc-info">
-        <div class="rc-name">${added ? '✅ ' : ''}${esc(best.name)}</div>
-        <div class="rc-sub"><span class="lang ${best.lang === 'ja' ? 'jp' : 'en'}">${best.lang === 'ja' ? 'JP' : 'EN'}</span> ${esc(best.setName)} · ${esc(best.localId)}${best.official ? '/' + best.official : ''}</div>
-        <div class="rc-sub" id="rcRar">…</div>
-        <div class="rc-price" id="rcPrice">…</div>
-        ${own ? `<div class="rc-own">Már megvan: ${own} db</div>` : ''}
-        ${unsure || !dec.sure ? '<div class="rc-warn">Nem biztos – ellenőrizd!</div>' : ''}
-      </div></div>
-    ${added ? `<div class="row"><button class="btn big" id="rcUndo">↶ Visszavonás</button><button class="btn big green" id="rcOk">Kész</button></div>`
-            : `<div class="row"><button class="btn big green grow" id="rcAdd">＋ Hozzáadás</button><button class="btn big" id="rcNo">Nem ez</button></div>`}
-    <div id="rcAlt" ${unsure && alts.length ? '' : 'hidden'}>
-      ${alts.length ? `<div class="hint">Válaszd ki a helyes lapot:</div><div class="cands">${alts.map(c => candHtml(c, cands.indexOf(c), false)).join('')}</div>` : '<div class="hint">Nincs más jelölt.</div>'}
-      <div class="row"><button class="btn grow small" id="rcManual">🔎 Kézi keresés</button><button class="btn grow small" id="rcClose">Mégse</button></div>
-    </div>`;
-  $('#resultCard').classList.add('up');
-  // ár, ritkaság (API) – árat nem találunk ki
-  cardRecord(best.lang, best.id, { pref: S.pref }).then(rec => {
-    if (rcDec !== dec) return;
-    $('#rcRar').textContent = [rec.rarity, CATS[rec.category] && rec.category !== 'Pokemon' ? CATS[rec.category] : ''].filter(Boolean).join(' · ') || '–';
-    const h = hufOf(rec);
-    $('#rcPrice').innerHTML = h == null ? '<span class="noprice">nincs ár</span>' : `${fmtHuf(h)} <small>${fmtCur(rec.price, rec.priceCurrency)}</small>`;
-    if (rec.imageSmall && $('#rcImg') && !best.image) $('#rcImg').src = rec.imageSmall;
-  }).catch(() => { if (rcDec === dec) { $('#rcRar').textContent = '–'; $('#rcPrice').textContent = 'ár most nem elérhető'; } });
-  const keyOf = c => c.lang + '|' + c.id;
-  const pick = async c => { await addCandidate(c, r); finishCard(r.print, keyOf(c)); };
-  $('#rcAdd')?.addEventListener('click', e => { e.currentTarget.disabled = true; pick(best); });
-  $('#rcNo')?.addEventListener('click', () => { $('#rcAlt').hidden = false; });
-  $('#rcOk')?.addEventListener('click', () => finishCard(r.print, keyOf(best)));
-  $('#rcUndo')?.addEventListener('click', async () => { await undoLast(); finishCard(r.print, keyOf(best)); });
-  $('#rcManual')?.addEventListener('click', () => { finishCard(r.print, keyOf(best)); openManual(r.name, r.number); });
-  $('#rcClose')?.addEventListener('click', () => finishCard(r.print, keyOf(best)));
-  $('#scanResult').querySelectorAll('[data-ci]').forEach(el => el.onclick = async () => {
-    const c = lastCands[+el.dataset.ci];
-    if (added) await undoLast(true);
-    pick(c);
-  });
-  if (added && undoMs) rcTimer = setTimeout(() => finishCard(r.print, keyOf(best)), undoMs);
+  const { r, cands } = dec;
+  lastCands = cands; lastScan = r; rcDec = dec; live.pause();
+  rcState = { cur: dec.best, added: false, cond: 'NM' };
+  const st = rcState;
+  const render = () => {
+    if (rcState !== st) return;
+    const best = st.cur;
+    const own = CARDS.filter(c => c.apiId === best.id).reduce((a, c) => a + (c.qty || 0), 0);
+    const img = best.image ? best.image + '/high.webp' : (best.imgUrl || (r.card ? thumb(r.card, 360) : ''));
+    const alts = cands.slice(0, 8);
+    $('#scanResult').innerHTML = `
+      <div class="rp-hero">${img ? `<img id="rcImg" src="${esc(img)}" alt="${esc(best.name)}">` : '<div class="noimg big"></div>'}</div>
+      <div class="rp-name">${esc(best.name)}</div>
+      <div class="rp-set"><span class="lang ${best.lang === 'ja' ? 'jp' : 'en'}">${best.lang === 'ja' ? 'JP' : 'EN'}</span> ${esc(best.setName)} • ${esc(best.localId)}${best.official ? '/' + best.official : ''}</div>
+      ${unsure && best === dec.best ? '<div class="rc-warn">Nem biztos a felismerés – ellenőrizd, vagy válassz az alternatívák közül!</div>' : ''}
+      <div class="rp-row"><label class="fld">Állapot<select id="rpCond">${CONDS.map(([k, v]) => `<option value="${k}" ${st.cond === k ? 'selected' : ''}>${k} – ${v}</option>`).join('')}</select></label>
+        <div class="tags" id="rcRar"><span class="tag">…</span></div></div>
+      ${own ? `<div class="rc-own">Már megvan: ${own} db</div>` : ''}
+      <div class="pboxes" id="rcPrice"><div class="pbox none"><small>Ár</small><b>…</b></div></div>
+      <div class="rp-alt-t">Nem ez a lap? Alternatívák lent</div>
+      <div class="rp-alts">${alts.map((c, i) => { const src = c.image ? c.image + '/low.webp' : c.imgUrl; return `<button type="button" class="alt ${c === best ? 'sel' : ''}" data-ci="${i}">${src ? `<img loading="lazy" src="${esc(src)}" alt="">` : `<div class="noimg">${esc(c.name)}</div>`}<b>${c.lang === 'ja' ? '🇯🇵' : '🇬🇧'} ${esc(c.name)}</b><small>${esc(c.setName)} · ${esc(c.localId)}${c.official ? '/' + c.official : ''}</small></button>`; }).join('')}
+        <button type="button" class="alt manual" id="rcManual"><span>🔎</span><b>Kézi keresés</b></button></div>`;
+    const bar = $('#rpBar');
+    bar.innerHTML = st.added
+      ? `<button class="btn big green done" id="rcAdd" disabled>Hozzáadva ✓</button><button class="btn big white" id="rcNew">Új szkennelés</button>`
+      : `<button class="btn big green" id="rcAdd">＋ Hozzáadás a gyűjteményhez</button><button class="btn big white" id="rcNew">Új szkennelés</button>`;
+    const note = $('#rpAdded'); note.hidden = !st.added; if (st.added) { note.innerHTML = `✓ Lap hozzáadva a gyűjteményhez${added || st.undoable ? ' · <button type="button" id="rcUndo">visszavonás</button>' : ''}`; }
+    $('#rpCond').onchange = e => { st.cond = e.target.value; };
+    $('#rcNew').onclick = () => finishCard();
+    $('#rcUndo')?.addEventListener('click', async () => { await undoLast(); st.added = false; st.undoable = false; render(); });
+    $('#rcAdd').onclick = async e => {
+      if (st.added) return;
+      e.currentTarget.disabled = true;
+      // hiba / lassú hálózat esetén se ragadjon be: a gomb újra megnyomható
+      try { await Promise.race([addCandidate(st.cur, r, st.cond), new Promise((_, rej) => setTimeout(() => rej(new Error('időtúllépés')), 25000))]); }
+      catch (err) { console.error(err); toast('Nem sikerült hozzáadni (' + (err.message || err) + '). Próbáld újra.'); const b = $('#rcAdd'); if (b) b.disabled = false; return; }
+      st.added = true; st.undoable = true; idxCountP = null; render();
+    };
+    $('#rcManual').onclick = () => { finishCard(); openManual(r.name, r.number); };
+    $('#scanResult').querySelectorAll('[data-ci]').forEach(el => el.onclick = () => { if (st.added) return; st.cur = alts[+el.dataset.ci]; render(); });
+    // ár, ritkaság (API) – árat nem találunk ki
+    cardRecord(best.lang, best.id, { pref: S.pref }).then(rec => {
+      if (rcState !== st || st.cur !== best) return;
+      const tags = [rec.rarity, CATS[rec.category] && rec.category !== 'Pokemon' ? CATS[rec.category] : (rec.category === 'Pokemon' ? 'Pokémon' : ''), ...(rec.variant && rec.variant !== 'normal' ? [VARS[rec.variant]] : [])].filter(Boolean);
+      $('#rcRar').innerHTML = tags.length ? tags.map(t => `<span class="tag">${esc(t)}</span>`).join('') : '<span class="tag">–</span>';
+      $('#rcPrice').innerHTML = priceBoxes(rec);
+      if (rec.image && $('#rcImg') && !best.image) $('#rcImg').src = rec.image;
+    }).catch(() => { if (rcState === st) { $('#rcRar').innerHTML = '<span class="tag">–</span>'; $('#rcPrice').innerHTML = '<div class="pbox none"><small>Ár</small><b>most nem elérhető</b></div>'; } });
+  };
+  if (added) { st.added = true; st.undoable = true; }
+  $('#resultPage').hidden = false; document.body.classList.add('rp-open'); $('#resultPage').scrollTop = 0; $('#scanResult').scrollTop = 0;
+  render();
 }
-async function addCandidate(c, r) {
+$('#rpBack').onclick = () => finishCard();
+async function addCandidate(c, r, cond = 'NM') {
   const rec = await cardRecord(c.lang, c.id, { pref: S.pref });
-  rec.condition = 'NM';
+  rec.condition = cond || 'NM';
   if (r?.card) rec.photo = thumb(r.card);
   const { card, merged } = await Store.addOrIncrement(rec);
   recordPrices(card, S).catch(() => {});
@@ -793,7 +833,6 @@ addEventListener('online', net); addEventListener('offline', net);
 (async function init() {
   const s = await Store.meta('settings'); if (s) S = { ...S, ...s };
   $$('#langSeg button').forEach(x => x.classList.toggle('on', x.dataset.lang === S.scanLang));
-  $('#fastMode').checked = !!S.fastMode;
   net(); renderSettings(); await reload(); renderSession();
   navigator.storage?.persist?.().catch(() => {});
   loadFx().catch(e => { console.warn(e); if (!S.eurHuf) toast('Nincs élő árfolyam – adj meg kézit a Beállításokban'); })
@@ -814,4 +853,4 @@ window.okemon = { setLang: l => { S.scanLang = l; jaSetIds = null; $$('#langSeg 
   // a legutóbbi szkennelés jelöltjei, és egy jelölt kiválasztása (mintha a felhasználó rákoppintana)
   exportJson, importHistory, renderCollTop: () => renderColl(),
   prepare: () => { S.preparedV = 0; return prepare(); }, lastCands: () => lastCands, setFast: v => { S.fastMode = !!v; }, live, startLive, stopLive, warpFromCanvas, recognizeFrame,
-  resultVisible: () => $('#resultCard').classList.contains('up'), rcDec: () => rcDec, pick: i => addCandidate(lastCands[i], lastScan) };
+  resultVisible: () => !$('#resultPage').hidden, rcDec: () => rcDec, pick: i => addCandidate(lastCands[i], lastScan) };

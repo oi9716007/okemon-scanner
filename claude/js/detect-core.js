@@ -7,6 +7,8 @@
 //   (63×88 ≈ 0,716), kitöltöttség (négyszög-e). Tartalék: háttérszín-különbség alapú maszk.
 // warpPerspective(src, sw, sh, quadPx, outW, outH) → Uint8ClampedArray (RGBA), bilineáris mintavétel.
 
+import { edgeField, houghQuad, scoreQuadPts } from './quadlines.js';
+
 const CARD_RATIO = 63 / 88;
 
 function toGray(rgba, w, h) {
@@ -192,6 +194,22 @@ export function detectQuad(rgba, w, h) {
     for (let i = 0, j = 0; j < m.length; i += 4, j++) m[j] = Math.hypot(rgba[i] - bgc[0], rgba[i + 1] - bgc[1], rgba[i + 2] - bgc[2]) > thr ? 1 : 0;
     res = evaluate(largestComponent(dilate(m, w, h, 1), w, h), w, h);
   }
+  if (res) res.via = 'folt';
+  // ÚJ: egyenes-élek alapú keresés. A színfolt-módszer elbukik, ha a kártyát kéz fogja (kéz + kar + kártya = nem téglalap alakú folt),
+  // és csonka négyszöget adhat, ha az ujjak takarják az éleket. A két jelölt közül az él-lefedettség szerint jobbat választjuk.
+  let F = null, hq = null;
+  try { F = edgeField(rgba, w, h); hq = houghQuad(F); } catch { hq = null; }
+  // a színfolt-eredmény megbízható, ha a folt kitölti a négyszöget és lap-arányú (nincs kéz a folthoz tapadva): megtartjuk
+  const blobTrusted = res && res.fill >= 0.93 && res.ratio > 0.64 && res.ratio < 0.80;
+  if (hq && !blobTrusted) {
+    let useHough = !res;
+    if (res) { const sb = scoreQuadPts(F, res.quadPx); useHough = !sb || hq.score > sb.score * 1.08; }
+    if (useHough) {
+      const p = hq.points, d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const sw = (d(p[0], p[1]) + d(p[3], p[2])) / 2, sh = (d(p[0], p[3]) + d(p[1], p[2])) / 2;
+      res = { quadPx: sw > sh ? [p[3], p[0], p[1], p[2]] : p, area: hq.areaRatio, ratio: hq.aspect, fill: 1, score: hq.score, via: 'élek', support: hq.support };
+    }
+  }
   if (!res) return null;
   res.sharp = sharpness(g0, w, h, res.quadPx);
   res.quad = res.quadPx.map(p => ({ x: p.x / w, y: p.y / h }));
@@ -224,4 +242,29 @@ export function warpPerspective(src, sw, sh, quadPx, outW, outH) {
     }
   }
   return out;
+}
+
+// Vezetőkeret-elvű kereső (tokban / fóliában tartott laphoz): a kivágásban a lap-arányú (63×88), a vezetőkerethez illeszkedő,
+// élekkel jól alátámasztott négyszöget keresi. A tok / fólia külső (kicsit más arányú, nagyobb) kerete így nem nyer a lap belső széle felett.
+// guide: a vezetőkeret négy sarka 0..1 arányban a képen. Visszaad: { quad (0..1), support, aspect, iou, score } | null
+export function detectCardGuided(rgba, w, h, guide) {
+  const F = edgeField(rgba, w, h);
+  const gp = guide.map(p => ({ x: p.x * w, y: p.y * h }));
+  const bb = pts => { const xs = pts.map(p => p.x), ys = pts.map(p => p.y); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+  const G = bb(gp), gA = (G[2] - G[0]) * (G[3] - G[1]);
+  const iouOf = pts => {
+    const A = bb(pts), iw = Math.min(A[2], G[2]) - Math.max(A[0], G[0]), ih = Math.min(A[3], G[3]) - Math.max(A[1], G[1]);
+    if (iw <= 0 || ih <= 0) return 0;
+    const inter = iw * ih; return inter / ((A[2] - A[0]) * (A[3] - A[1]) + gA - inter);
+  };
+  const scorer = (pts, sup, aspect) => {
+    const iou = iouOf(pts); if (iou < 0.45) return 0;
+    const asp = Math.exp(-(((aspect - 0.716) / 0.04) ** 2));
+    return (0.5 * sup.mean + 0.5 * sup.top3) * asp * iou * iou;
+  };
+  const hq = houghQuad(F, { maxPeaks: 60, scorer });
+  if (!hq || hq.score <= 0) return null;
+  const iou = iouOf(hq.points);
+  if (hq.support < 0.5 || Math.abs(hq.aspect - 0.716) > 0.07) return null;
+  return { quad: hq.points.map(p => ({ x: p.x / w, y: p.y / h })), support: hq.support, aspect: hq.aspect, iou, score: hq.score };
 }
