@@ -2,6 +2,8 @@
 import { Store, onChange, itemKey } from './db.js';
 import { extractPrices, choosePrice, getSets, getSet, getCard, searchByName, searchJaByEnglishName, findCandidates, cardRecord, repriceRecord, fetchFx, nameSim, jaImage, setCardImages } from './api.js';
 import { recognize, printSim, printOfUrl, thumb, normalizeCard, warmUp, ocrNameJa } from './recognize.js';
+import { detectCardQuad, warpCard, laplacianVariance } from './detect.js';
+import { createLive } from './live.js';
 import { imageSearch, buildIndex } from './imageindex.js';
 import { identify } from './identify.js';
 import { computeProgress } from './completeness.js';
@@ -19,7 +21,7 @@ const CONDS = [['NM', 'Near Mint'], ['LP', 'Lightly Played'], ['MP', 'Moderately
 const VARS = { normal: 'Normál', holo: 'Holo', reverse: 'Reverse holo' };
 const CATS = { Pokemon: 'Pokémon', Trainer: 'Trainer', Energy: 'Energy' };
 
-let S = { catFilter: 'all', setSort: 'value', compMode: 'total', pref: 'cardmarket', fxManual: false, eurHuf: null, usdHuf: null, fx: null, lastRefresh: null, scanLang: 'auto' };
+let S = { catFilter: 'all', setSort: 'value', compMode: 'total', pref: 'cardmarket', fxManual: false, eurHuf: null, usdHuf: null, fx: null, lastRefresh: null, scanLang: 'auto', quickAdd: false };
 let CARDS = [];
 
 function toast(msg, ms = 2600) {
@@ -50,7 +52,8 @@ function totals(list = CARDS) {
 function go(v) {
   $$('.view').forEach(e => e.classList.toggle('active', e.id === 'v-' + v));
   $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.go === v));
-  if (v === 'scan') startCamera(); else stopCamera();
+  if (v === 'scan') { if (!live?.external()) startCamera(); live?.start(); }
+  else { live?.stop(); if (!live?.external()) stopCamera(); }
   if (v === 'coll') renderColl();
   window.scrollTo(0, 0);
   history.replaceState(null, '', '#' + v);
@@ -440,33 +443,79 @@ $('#prefSeg').onclick = async e => {
 
 // ---------- kamera ----------
 let stream = null;
-async function startCamera() {
-  if (stream) return;
+const iosCam = /iPhone|iPad|iPod/.test(navigator.userAgent);
+function camHelp(kind) {
+  const where = iosCam
+    ? 'iPhone-on: Beállítások › Safari › Kamera › Engedélyezés. Ha a főképernyőről nyitottad: Beállítások › Okemon › Kamera.'
+    : 'Engedélyezd a kamerát a böngésző címsoránál, vagy a rendszer beállításaiban.';
+  if (kind === 'insecure') return 'A kamera csak biztonságos oldalon (HTTPS) vagy localhoston indul. Használd a Fotó gombot, vagy a kézi keresést.';
+  if (kind === 'missing') return 'Ez az eszköz nem adott kamerát. Használd a Fotó gombot vagy a kézi keresést.';
+  return 'Nincs kamera-engedély. ' + where + ' Utána koppints a Kamera indítása gombra.';
+}
+function showCamMsg(text, button) {
   const msg = $('#camMsg');
-  if (!navigator.mediaDevices?.getUserMedia) { msg.textContent = 'A böngésző nem engedi a kamerát (HTTPS kell). Használd a „Fotó / feltöltés” gombot.'; return; }
+  msg.classList.remove('hide');
+  $('#camMsgText').textContent = text;
+  $('#btnCamStart').hidden = !button;
+}
+async function startCamera() {
+  if (live?.external()) return;
+  if (stream) return;
+  const v = $('#video');
+  v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', '');
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) { showCamMsg(camHelp('insecure'), false); return; }
+  const tries = [
+    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false },
+    { video: { facingMode: 'environment' }, audio: false },
+    { video: true, audio: false },
+  ];
+  let last = null;
+  for (const c of tries) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(c);
+      break;
+    } catch (e) { last = e; stream = null; }
+  }
+  if (!stream) {
+    const denied = last && (last.name === 'NotAllowedError' || last.name === 'SecurityError');
+    showCamMsg(denied || !last ? camHelp('denied') : (last.name === 'NotFoundError' ? camHelp('missing') : camHelp('denied')), true);
+    return;
+  }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false });
-    const v = $('#video'); v.srcObject = stream; await v.play().catch(() => {});
+    v.srcObject = stream; await v.play().catch(() => {});
     const tr = stream.getVideoTracks()[0];
-    try { const cap = tr.getCapabilities?.(); if (cap?.focusMode?.includes('continuous')) await tr.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch {}
-    msg.classList.add('hide');
+    try { const cap = tr.getCapabilities?.() || {}; if (cap.focusMode?.includes('continuous')) await tr.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch {}
+    $('#camMsg').classList.add('hide');
   } catch (e) {
-    msg.classList.remove('hide');
-    msg.textContent = 'Nem érhető el a kamera (' + (e.name || e.message) + '). Engedélyezd, vagy használd a „Fotó / feltöltés” gombot.';
+    showCamMsg(camHelp('denied'), true);
     stream = null;
   }
 }
 function stopCamera() {
   stopLoop();
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; $('#video').srcObject = null; $('#camMsg').classList.remove('hide'); $('#camMsg').textContent = 'Kamera kikapcsolva.'; }
+  if (live?.external()) return;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; $('#video').srcObject = null; showCamMsg('Kamera kikapcsolva.', true); }
 }
 $('#btnCam').onclick = () => stream ? stopCamera() : startCamera();
+$('#btnCamStart').onclick = () => startCamera();
 
 // a vezetőkeret területe a videó saját képpontjaiban (object-fit: cover)
 function guideCanvas() {
   const v = $('#video'); const vw = v.videoWidth, vh = v.videoHeight;
   if (!vw) return null;
-  const vr = v.getBoundingClientRect(), gr = $('#guide').getBoundingClientRect();
+  const q = live?.quad();
+  if (q) return warpCard(v, q, 900);
+  const gr = $('#guide').getBoundingClientRect();
+  if (gr.width < 30) {
+    const ar = 63 / 88;
+    let w = vw * 0.82, h = w / ar;
+    if (h > vh * 0.9) { h = vh * 0.9; w = h * ar; }
+    const c = document.createElement('canvas');
+    c.width = Math.round(w); c.height = Math.round(h);
+    c.getContext('2d').drawImage(v, (vw - w) / 2, (vh - h) / 2, w, h, 0, 0, c.width, c.height);
+    return c;
+  }
+  const vr = v.getBoundingClientRect();
   const s = Math.max(vr.width / vw, vr.height / vh);
   const ox = (vr.width - vw * s) / 2, oy = (vr.height - vh * s) / 2;
   const pad = 0.05;
@@ -481,9 +530,16 @@ function guideCanvas() {
 // ---------- szkennelés ----------
 $('#langSeg').onclick = async e => {
   const b = e.target.closest('button'); if (!b) return;
-  S.scanLang = b.dataset.lang; jaSetIds = null; $$('#langSeg button').forEach(x => x.classList.toggle('on', x === b)); saveSettings();
+  S.scanLang = b.dataset.lang; jaSetIds = null; totalsSet = null; $$('#langSeg button').forEach(x => x.classList.toggle('on', x === b)); saveSettings();
 };
 let jaSetIds = null, totalsSet = null;
+async function ensureCatalog() {
+  if (jaSetIds && totalsSet) return;
+  const [ja, en] = await Promise.all([getSets('ja').catch(() => []), getSets('en').catch(() => [])]);
+  jaSetIds = ja.map(s => s.id);
+  const pick = S.scanLang === 'ja' ? ja : S.scanLang === 'en' ? en : ja.concat(en);
+  totalsSet = new Set(pick.map(s => +s.cardCount?.official).filter(n => n > 0));
+}
 const recentSets = [];
 // a készletben szereplő szettek, a legutóbb szkenneltek elöl
 const ownedSetPairs = () => {
@@ -501,12 +557,7 @@ async function scanSource(src, { fromLoop = false } = {}) {
   $('#guide').classList.add('busy');
   try {
     status('Szöveg olvasása…');
-    if (!jaSetIds) {
-      const [ja, en] = await Promise.all([getSets('ja').catch(() => []), getSets('en').catch(() => [])]);
-      jaSetIds = ja.map(s => s.id);
-      const pick = S.scanLang === 'ja' ? ja : S.scanLang === 'en' ? en : ja.concat(en);
-      totalsSet = new Set(pick.map(s => +s.cardCount?.official).filter(n => n > 0));
-    }
+    await ensureCatalog();
     const r = await recognize(src, { lang: S.scanLang, jaSetIds, totals: totalsSet });
     if (fromLoop && lastAdded && printSim(r.print, lastAdded.print) > 0.82) { status('Ugyanaz a lap – tedd a következőt a keretbe'); return; }
     const { cands, best, sure } = await identify(r, { lang: S.scanLang, recentSets, ownedSets: ownedSetPairs(), onStatus: status });
@@ -749,9 +800,50 @@ onChange(() => { clearTimeout(rt); rt = setTimeout(reload, 80); });
 function net() { const n = $('#netState'); n.textContent = navigator.onLine ? '● online' : '● offline'; n.classList.toggle('off', !navigator.onLine); }
 addEventListener('online', net); addEventListener('offline', net);
 
+let preparing = false;
+function ownedQty(apiId) {
+  return CARDS.filter(c => !c.deleted && c.apiId === apiId).reduce((s, c) => s + (c.qty || 0), 0);
+}
+const live = createLive({
+  video: () => $('#video'),
+  overlay: () => $('#overlay'),
+  status,
+  lang: () => S.scanLang,
+  totals: () => (totalsSet ? [...totalsSet] : []),
+  jaSetIds: () => jaSetIds || [],
+  ensureCatalog,
+  identify: (r, o) => identify(r, { lang: S.scanLang, recentSets, ownedSets: ownedSetPairs(), onStatus: status, allowJaName: o?.fast === false, imageSearch: true }),
+  cardRecord: c => cardRecord(c.lang, c.id, { pref: S.pref }),
+  hufOf, fmtHuf, ownedQty,
+  addCandidate, undoLast,
+  openManual, toast,
+  quick: () => !!$('#quickAdd')?.checked,
+  isBusy: () => busy,
+  preparing: () => preparing,
+});
+$('#quickAdd').checked = !!S.quickAdd;
+$('#quickAdd').onchange = () => { S.quickAdd = $('#quickAdd').checked; saveSettings(); };
+$('#sessionToggle').onclick = () => $('#session').classList.toggle('collapsed');
+async function prepareLive(withIndex) {
+  const bar = $('#prepBar');
+  preparing = true;
+  bar.hidden = false;
+  bar.textContent = 'Előkészítés… szövegolvasó';
+  try {
+    await live.warmup(['eng', 'jpn']);
+    if (withIndex) {
+      bar.textContent = 'Előkészítés… képi index';
+      await buildIndex(FEATURED.map(f => [f.lang === 'JP' ? 'ja' : 'en', f.setId]), t => { bar.textContent = 'Előkészítés… ' + t; });
+    }
+  } catch (e) { console.warn(e); }
+  preparing = false;
+  bar.hidden = true;
+}
+
 (async function init() {
   const s = await Store.meta('settings'); if (s) S = { ...S, ...s };
   $$('#langSeg button').forEach(x => x.classList.toggle('on', x.dataset.lang === S.scanLang));
+  $('#quickAdd').checked = !!S.quickAdd;
   net(); renderSettings(); await reload(); renderSession();
   navigator.storage?.persist?.().catch(() => {});
   loadFx().catch(e => { console.warn(e); if (!S.eurHuf) toast('Nincs élő árfolyam – adj meg kézit a Beállításokban'); })
@@ -761,14 +853,20 @@ addEventListener('online', net); addEventListener('offline', net);
       }
     });
   const h = location.hash.slice(1); if (['home', 'scan', 'coll', 'set'].includes(h)) go(h);
-  // OCR-motor előtöltése a háttérben
-  setTimeout(() => warmUp(['eng']).catch(() => {}), 1500);
+  const testMode = new URLSearchParams(location.search).get('test');
+  if (testMode === 'live') prepareLive(false);
+  else if (!testMode) prepareLive(true);
+  else setTimeout(() => warmUp(['eng']).catch(() => {}), 1500);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
 
 // tesztelési horog
 if (location.search.includes('test=')) import('../tests/harness.js');
-window.okemon = { setLang: l => { S.scanLang = l; jaSetIds = null; $$('#langSeg button').forEach(x => x.classList.toggle('on', x.dataset.lang === l)); }, scanSource, Store, recognize, findCandidates, normalizeCard, totals: () => totals(), hufOf, S: () => S,
+window.okemon = { setLang: l => { S.scanLang = l; jaSetIds = null; totalsSet = null; $$('#langSeg button').forEach(x => x.classList.toggle('on', x.dataset.lang === l)); }, scanSource, Store, recognize, findCandidates, normalizeCard, totals: () => totals(), hufOf, S: () => S,
   // a legutóbbi szkennelés jelöltjei, és egy jelölt kiválasztása (mintha a felhasználó rákoppintana)
   exportJson, importHistory, renderCollTop: () => renderColl(),
-  lastCands: () => lastCands, pick: i => addCandidate(lastCands[i], lastScan) };
+  lastCands: () => lastCands, pick: i => addCandidate(lastCands[i], lastScan),
+  detectCardQuad, warpCard, laplacianVariance, go,
+  liveState: () => live.state(), liveAdd: () => live.add(), liveReject: () => live.reject(),
+  attachLiveStream: s => live.attachStream(s), recognizeFast: src => live.recognizeFast(src),
+  SHARP_MIN: live.SHARP_MIN };

@@ -224,3 +224,51 @@ main { padding: 14px 16px; max-width: 640px; margin: 0 auto; }
 .cond { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 0 6px; border-radius: 6px; background: #2a2a2a; color: #eee; margin-right: 2px; }
 .cat-meta span { white-space: nowrap; }
 .cat-head > div:last-child { min-width: 0; }
+
+/* élő szkenner */
+.prep-bar { position: fixed; left: 0; right: 0; top: 0; z-index: 40; background: #1d1a00; color: var(--gold2); text-align: center; font-weight: 700; font-size: 14px; padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px; border-bottom: 1px solid #3a3000; }
+.prep-bar[hidden] { display: none; }
+#v-scan.active { position: fixed; inset: 0; z-index: 25; margin: 0; padding: 0; max-width: none; background: #000; }
+.cam-stage { position: absolute; inset: 0; background: #000; overflow: hidden; }
+.cam-stage video, .cam-stage canvas.overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cam-stage canvas.overlay { pointer-events: none; }
+#v-scan .cam-msg { z-index: 3; flex-direction: column; gap: 14px; background: rgba(0,0,0,.55); }
+#v-scan .cam-msg p { margin: 0; }
+#v-scan .scan-status { z-index: 4; top: auto; bottom: calc(168px + var(--safe-b)); }
+.live-top { position: absolute; left: 10px; right: 10px; top: calc(8px + env(safe-area-inset-top, 0px)); z-index: 4; display: flex; gap: 8px; align-items: center; }
+.live-top .seg { flex: 1; margin: 0; background: rgba(0,0,0,.55); }
+.live-top .seg button { min-height: 40px; font-size: 14px; }
+.toggle.quick { margin: 0; padding: 6px 8px; background: rgba(0,0,0,.55); border-radius: 12px; color: #fff; font-size: 13px; }
+.live-tools { position: absolute; left: 8px; right: 8px; bottom: calc(78px + var(--safe-b)); z-index: 4; display: flex; gap: 6px; }
+.live-tools .btn { flex: 1; min-height: 42px; background: rgba(12,12,12,.72); font-size: 13px; padding: 0 8px; }
+.live-tools .btn.file { margin: 0; }
+.live-card { position: absolute; left: 0; right: 0; bottom: calc(74px + var(--safe-b)); z-index: 6; background: #0e0e0e; border-top: 2px solid #3dff86; border-radius: 18px 18px 0 0; padding: 12px 12px 10px; transform: translateY(110%); transition: transform .28s ease; max-height: 62vh; overflow: auto; }
+.live-card.show { transform: translateY(0); }
+.live-card[hidden] { display: none; }
+.lc-main { display: flex; gap: 12px; align-items: flex-start; }
+.lc-main img, .lc-ph { width: 92px; aspect-ratio: 63/88; object-fit: cover; border-radius: 8px; background: #1a1a1a; flex: none; }
+.lc-ph { display: flex; align-items: center; justify-content: center; text-align: center; color: var(--mut); font-size: 12px; padding: 6px; }
+.lc-name { font-size: 18px; font-weight: 800; line-height: 1.2; }
+.lc-set, .lc-meta { color: var(--mut); font-size: 13.5px; }
+.lc-price { color: var(--gold); font-weight: 900; font-size: 22px; margin-top: 2px; }
+.lc-owned { color: var(--gold2); font-weight: 700; font-size: 14px; }
+.lc-actions { display: flex; gap: 8px; margin-top: 10px; }
+.lc-actions .btn { margin: 0; min-height: 54px; }
+.btn.add { flex: 1.5; background: linear-gradient(180deg, #6dffae, #1fa85a); color: #042; border-color: #1fa85a; font-size: 18px; font-weight: 800; }
+.lc-alts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.lc-alts .btn { grid-column: 1 / -1; }
+.lc-fail { text-align: center; padding: 6px 8px 2px; }
+.lc-fail b { color: var(--gold2); font-size: 17px; }
+.lc-fail p { color: #ddd; margin: 6px 0 10px; }
+.undo-bar { position: absolute; left: 12px; right: 12px; bottom: calc(150px + var(--safe-b)); z-index: 7; background: #102818; border: 1px solid #3dff86; color: #fff; border-radius: 14px; padding: 10px 12px; display: flex; gap: 10px; align-items: center; justify-content: space-between; font-weight: 700; }
+.undo-bar[hidden] { display: none; }
+.undo-bar button { min-height: 40px; border-radius: 10px; border: 1px solid #3dff86; background: transparent; color: #b8ffd4; font-weight: 800; padding: 0 12px; }
+.photo-add { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+#v-scan #scanResult { position: absolute; left: 8px; right: 8px; bottom: calc(150px + var(--safe-b)); z-index: 6; max-height: 46vh; overflow: auto; }
+.session-toggle { position: absolute; right: 10px; top: calc(64px + env(safe-area-inset-top, 0px)); z-index: 4; min-height: 36px; background: rgba(0,0,0,.55); font-size: 12.5px; }
+#v-scan .session-list { position: absolute; left: 8px; right: 8px; top: calc(108px + env(safe-area-inset-top, 0px)); z-index: 5; max-height: 40vh; overflow: auto; background: rgba(0,0,0,.88); border-radius: 12px; padding: 8px; }
+#v-scan .session-list.collapsed { display: none; }
+@media (max-width: 380px) {
+  .live-tools { flex-wrap: wrap; }
+  .lc-name { font-size: 16px; }
+}

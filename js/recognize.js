@@ -1,11 +1,27 @@
 // Okemon Scanner – lapfelismerés: kártya kivágása → OCR (név + gyűjtői szám/szettkód) → képi ujjlenyomat.
-const TESS_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+const TESS_VER = '5.1.1';
+const TESS_URL = `https://cdn.jsdelivr.net/npm/tesseract.js@${TESS_VER}/dist/tesseract.min.js`;
+const TESS_ESM = `https://cdn.jsdelivr.net/npm/tesseract.js@${TESS_VER}/+esm`;
 export const CW = 900, CH = 1257; // normalizált kártyaméret (63×88 mm arány)
+// A worker ezekkel a fix URL-ekkel indul, így a Service Worker előre cache-elheti.
+export const TESS_PATHS = {
+  workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@${TESS_VER}/dist/worker.min.js`,
+  corePath: `https://cdn.jsdelivr.net/npm/tesseract.js-core@${TESS_VER}/tesseract-core-simd-lstm.wasm.js`,
+  langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+};
 
 let tessP = null;
 function loadTesseract() {
-  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (globalThis.Tesseract?.createWorker) return Promise.resolve(globalThis.Tesseract);
   if (tessP) return tessP;
+  if (typeof document === 'undefined') {
+    tessP = import(TESS_ESM).then(m => {
+      const T = m.default?.createWorker ? m.default : m;
+      globalThis.Tesseract = T;
+      return T;
+    }).catch(e => { tessP = null; throw e; });
+    return tessP;
+  }
   tessP = new Promise((res, rej) => {
     const s = document.createElement('script');
     s.src = TESS_URL; s.async = true;
@@ -19,7 +35,7 @@ const workers = {};
 async function worker(lang) {
   if (!workers[lang]) workers[lang] = (async () => {
     const T = await loadTesseract();
-    return T.createWorker(lang, 1, { logger: () => {} });
+    return T.createWorker(lang, 1, { logger: () => {}, ...TESS_PATHS });
   })().catch(e => { delete workers[lang]; throw e; });
   return workers[lang];
 }
@@ -27,9 +43,11 @@ export async function warmUp(langs = ['eng']) { await Promise.all(langs.map(work
 
 // ---------- képsegédek ----------
 export function canvasFrom(src, w, h) {
-  const c = document.createElement('canvas');
-  c.width = w || src.videoWidth || src.naturalWidth || src.width;
-  c.height = h || src.videoHeight || src.naturalHeight || src.height;
+  const W = w || src?.videoWidth || src?.naturalWidth || src?.width || 1;
+  const H = h || src?.videoHeight || src?.naturalHeight || src?.height || 1;
+  let c;
+  if (typeof document === 'undefined') c = new OffscreenCanvas(Math.max(1, W | 0), Math.max(1, H | 0));
+  else { c = document.createElement('canvas'); c.width = Math.max(1, W | 0); c.height = Math.max(1, H | 0); }
   return c;
 }
 export function loadImage(url, cors = true) {
@@ -160,7 +178,11 @@ const NUM_WL = '0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 async function ocr(lang, canvas, psm, whitelist = '') {
   const w = await worker(lang);
   await w.setParameters({ tessedit_pageseg_mode: String(psm), preserve_interword_spaces: '1', tessedit_char_whitelist: whitelist });
-  const { data } = await w.recognize(canvas);
+  // A workerben nincs HTMLCanvasElement: a képpontok mennek át (OffscreenCanvas → ImageData).
+  // A workerben a vászon OffscreenCanvas: PNG-blobként megy a Tesseractnak (a nyers ImageData-t ott elutasítja).
+  let input = canvas;
+  if (typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas) input = await canvas.convertToBlob({ type: 'image/png' });
+  const { data } = await w.recognize(input);
   return data.text || '';
 }
 
@@ -177,18 +199,26 @@ export function findNumber(raw, totals) {
     const n = parseInt(m[2], 10), tot = parseInt(m[4], 10);
     if (ok(n, tot) || pre) return { number: pre + m[2], total: tot, how: 'slash' };
   }
-  // 2) összefolyt számjegyek: 1207103 → 120/103 (a „/” helyén 7 vagy 1), 120103 → 120/103
+  // 2) összefolyt számjegyek: 1207103 → 120/103 (a „/” helyén 7 vagy 1), 120103 → 120/103.
+  // Hosszabb, zajos számsorban (pl. 7120710300) ablakot csúsztatunk, és a legerősebb illesztést vesszük.
   const cands = [];
-  for (const m of t.matchAll(/(?<![0-9])\d{5,7}(?![0-9])/g)) {
-    const d = m[0];
+  const consider = (d, bonus = 0) => {
     for (let i = 1; i <= 3; i++) {
       for (const skip of [1, 0]) {
         const l = d.slice(0, i), sep = d[i], r = d.slice(i + skip);
         if (skip && !'71'.includes(sep)) continue;
-        if (r.length < 2 || r.length > 3) continue;
+        if (r.length < 2 || r.length > 3 || l.length + (skip ? 1 : 0) + r.length !== d.length) continue;
         const n = parseInt(l, 10), tot = parseInt(r, 10);
-        if (ok(n, tot) && totals?.size) cands.push({ number: l, total: tot, how: skip ? 'sep7' : 'join', w: (skip ? 2 : 1) + (l.length === r.length ? 1 : 0) });
+        if (!(ok(n, tot) && totals?.size)) continue;
+        cands.push({ number: l, total: tot, how: skip ? 'sep7' : 'join', w: (skip ? 2 : 1) + (l.length === r.length ? 1 : 0) + bonus });
       }
+    }
+  };
+  for (const m of t.matchAll(/(?<![0-9])\d{5,12}(?![0-9])/g)) {
+    const d = m[0];
+    if (d.length <= 7) consider(d, 1);
+    else for (let s = 0; s <= d.length - 5; s++) for (const len of [7, 6]) {
+      if (s + len <= d.length) consider(d.slice(s, s + len), 0);
     }
   }
   cands.sort((a, b) => b.w - a.w);
@@ -427,14 +457,18 @@ async function readNumber(cards, out, opts) {
       // érvényes összlap: pontos egyezés, vagy legfeljebb 1 karakter eltérés egy létező szett összlapjától
       let cand = !totList ? [r.tot] : totList.includes(String(+r.tot)) ? [String(+r.tot)] : totList.filter(x => lev1(x, r.tot) || lev1(x, String(+r.tot)));
       if (!cand.length || cand.length > 6) continue;
-      const k = parseInt(r.number.replace(/\D/g, ''), 10) + (/^[A-Z]/.test(r.number) ? '|' + r.number.replace(/\d/g, '') : '');
-      if (!(parseInt(r.number.replace(/\D/g, ''), 10) > 0)) continue;
+      const nAbs = parseInt(r.number.replace(/\D/g, ''), 10);
+      // a titkos ritkaság lehet nagyobb az összlapnál, de a „950/076” típusú OCR-zaj nem szám
+      if (!(nAbs > 0) || nAbs > +r.tot + 220) continue;
+      const k = nAbs + (/^[A-Z]/.test(r.number) ? '|' + r.number.replace(/\d/g, '') : '');
       const v = nums.get(k) || { n: 0, number: r.number, tot: new Map() };
       // a lapon nyomtatott formátum (pl. 022/128: a szám annyi jegyű, mint az összlap) erősebb jel
       const digits = r.number.replace(/\D/g, '').length;
-      v.n += digits === String(+cand[0]).length ? 1 : 0.5;
+      const printedDigits = String(r.tot).replace(/\D/g, '').length;
+      // 050/076: a nyomtatott összlap 3 jegyű, a katalógusbeli 76 viszont 2. A lapon lévő forma számít.
+      v.n += (digits === printedDigits || digits === String(+cand[0]).length) ? 1 : 0.5;
       if (digits > (v.number.replace(/\D/g, '').length)) v.number = r.number;
-      const exact = cand.length === 1 && String(+r.tot) === cand[0];
+      const exact = cand.length === 1 && String(+r.tot) === String(+cand[0]);
       for (const t of cand) v.tot.set(t, (v.tot.get(t) || 0) + (exact ? 2 : 1));
       nums.set(k, v);
       reads++;
@@ -460,10 +494,34 @@ async function readNumber(cards, out, opts) {
   const ST = [0.0, 0.87, 1.0, 0.13];
   const card = cards[0];
   const BL = [0.0, 0.895, 0.56, 0.09];
-  const jobs = [() => [prepGray(card, ...ST, 2.5), 11, ''], () => [prepGray(card, ...BL, 3.5), 11, ''], () => [prepAdaptive(card, ...BL, 3.5, false), 11, '']];
+  const jobs = [];
+  if (opts.fast) {
+    // Gyors út: vékony alsó sávok (itt van a gyűjtői szám), aztán legfeljebb két szám-blokk.
+    // A részletes, sok kivágásos olvasás csak a lassú úton fut.
+    for (const y of [0.935, 0.95, 0.92]) {
+      jobs.push(() => [prepGray(card, 0.0, y, 0.58, 0.034, 4), 7, NUM_WL]);
+      jobs.push(() => [prepAdaptive(card, 0.0, y, 0.58, 0.034, 4, true), 7, NUM_WL]);
+    }
+    const bands = [];
+    for (const b of lineBands(card, 0.0, 0.86, 0.62, 0.135).slice(0, 3))
+      if (!bands.some(o => Math.min(o.y1, b.y1) - Math.max(o.y0, b.y0) > 0.5 * Math.min(o.y1 - o.y0, b.y1 - b.y0))) bands.push(b);
+    const segs = [];
+    for (const b of bands) for (const sg of lineSegments(card, b).slice(0, 4)) segs.push([card, b, sg]);
+    const pri = ([, b, sg]) => { const w = sg.x1 - sg.x0, yc = (b.y0 + b.y1) / 2; return (sg.x0 < 0.45 ? 2 : 0) + (w >= 0.08 && w <= 0.42 ? 2 : 0) + (yc > 0.9 && yc < 0.98 ? 1 : 0); };
+    for (const [cd, b, sg] of segs.sort((a, c) => pri(c) - pri(a)).slice(0, 2)) {
+      jobs.push(() => [segCanvas(cd, b, sg, 'shear'), 7, NUM_WL]);
+      jobs.push(() => [segCanvas(cd, b, sg, 'light'), 7, NUM_WL]);
+    }
+  }
+  if (!opts.fast) jobs.push(
+    () => [prepGray(card, ...ST, 2.5), 11, ''],
+    () => [prepGray(card, ...BL, 3.5), 11, ''],
+    () => [prepAdaptive(card, ...BL, 3.5, false), 11, ''],
+  );
   // szövegsorok a lap alján, soronként blokkokra bontva; a szám-blokk nagyítva, többféle előfeldolgozással.
   // Előbb az eredeti, aztán (ha ferde volt) a kiegyenesített kártyaképen – a szavazatok összeadódnak.
-  const segJobs = cards.map(cd => {
+  // A gyors út nem csinálja meg: csak a fenti néhány alsó sáv fut.
+  const segJobs = opts.fast ? [] : cards.map(cd => {
     const list = [];
     // sorok a teljes szélességben ÉS a bal 60%-ban (teljes-art lapon a rajz elnyomhatja a számsort)
     const bands = [];
@@ -474,17 +532,20 @@ async function readNumber(cards, out, opts) {
     const pri = ([, b, sg]) => { const w = sg.x1 - sg.x0, yc = (b.y0 + b.y1) / 2; return (sg.x0 < 0.45 ? 2 : sg.x1 > 0.8 ? 1 : 0) + (w >= 0.08 && w <= 0.4 ? 2 : 0) + (yc > 0.9 && yc < 0.975 ? 1 : 0); };
     return list.sort((a, b) => pri(b) - pri(a)).slice(0, 4);
   });
-  for (const list of segJobs) for (const [cd, b, sg] of list) jobs.push(() => [segCanvas(cd, b, sg, 'shear'), 7, NUM_WL]);
-  // fix vékony sávok a bal alsó részen (a sorkereséstől függetlenül; teljes-art lapon fehér betű → „light”)
-  for (const y of [0.935, 0.95, 0.92, 0.965, 0.905]) {
-    jobs.push(() => [prepGray(card, 0.0, y, 0.6, 0.032, 4), 7, NUM_WL]);
-    jobs.push(() => [prepAdaptive(card, 0.0, y, 0.6, 0.032, 4, true), 7, NUM_WL]);
+  if (!opts.fast) {
+    for (const list of segJobs) for (const [cd, b, sg] of list) jobs.push(() => [segCanvas(cd, b, sg, 'shear'), 7, NUM_WL]);
+    // fix vékony sávok a bal alsó részen (a sorkereséstől függetlenül; teljes-art lapon fehér betű → „light”)
+    for (const y of [0.935, 0.95, 0.92, 0.965, 0.905]) {
+      jobs.push(() => [prepGray(card, 0.0, y, 0.6, 0.032, 4), 7, NUM_WL]);
+      jobs.push(() => [prepAdaptive(card, 0.0, y, 0.6, 0.032, 4, true), 7, NUM_WL]);
+    }
+    for (const list of segJobs) for (const mode of ['gray', 'dark', 'light']) for (const [cd, b, sg] of list) jobs.push(() => [segCanvas(cd, b, sg, mode), 7, NUM_WL]);
+    jobs.push(() => [prepAdaptive(card, ...ST, 2.5, true), 11, '']);
   }
-  for (const list of segJobs) for (const mode of ['gray', 'dark', 'light']) for (const [cd, b, sg] of list) jobs.push(() => [segCanvas(cd, b, sg, mode), 7, NUM_WL]);
-  jobs.push(() => [prepAdaptive(card, ...ST, 2.5, true), 11, '']);
   out.numberJobs = 0;
-  const MAX_JOBS = 40; // utána a szigorú végső döntés jön (sebesség: sorozatszkennelésnél ~1–4 mp)
-  for (const mk of jobs.slice(0, MAX_JOBS - 2).concat(jobs.slice(-2))) {
+  const MAX_JOBS = opts.fast ? 8 : 40; // utána a szigorú végső döntés jön (sebesség: sorozatszkennelésnél ~1–4 mp)
+  const runJobs = opts.fast ? jobs.slice(0, MAX_JOBS) : jobs.slice(0, MAX_JOBS - 2).concat(jobs.slice(-2));
+  for (const mk of runJobs) {
     const [cv, psm, wl] = mk();
     out.numberJobs++;
     if (note(await ocr('eng', cv, psm, wl))) return;
@@ -496,12 +557,15 @@ async function readNumber(cards, out, opts) {
 // opts: { lang: 'auto'|'en'|'ja', jaSetIds, rect }
 export async function recognize(src, opts = {}) {
   const t0 = performance.now();
-  const card = normalizeCard(src, opts.rect);
+  if (opts.totals && !(opts.totals instanceof Set)) opts = { ...opts, totals: new Set(opts.totals) };
+  const card = opts.normalized ? src : normalizeCard(src, opts.rect);
   const out = { card, print: artPrint(card), number: null, total: null, setCodes: [], name: '', raw: {} };
   // 1) gyűjtői szám + szettkód az alsó sávból (modern lapok: bal alul; régiek: jobb alul)
   // kis, célzott kivágások: bal alsó sarok (modern lapok), jobb alsó (régi lapok), végül az egész alsó sáv
-  const dk = deskew(card); out.skew = dk.angle;
+  // Gyors út: nincs kiegyenesítés és nincs név-OCR, csak néhány alsó sáv. A lassú út változatlan.
+  const dk = opts.fast ? { card, angle: 0 } : deskew(card); out.skew = dk.angle;
   await readNumber(dk.angle ? [card, dk.card] : [card], out, opts);
+  if (opts.fast) { out.ms = Math.round(performance.now() - t0); out.fast = true; return out; }
   // 2) név a felső sávból
   const wantJa = opts.lang === 'ja' || (opts.lang === 'auto' && out.setCodes.some(c => /\d/.test(c)));
   const top = () => prepRegion(card, 0.04, 0.025, 0.70, 0.075, 3);
